@@ -1,0 +1,273 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: API Gateway & Lambda for Get Function
+
+Parameters:
+  System:
+    Type: String
+    Default: kb-bedrock-rag-chat     
+
+  KnowledgeBaseId:
+    Type: String
+    Default: FCMT0YSU3F
+
+  DynamoTableName:
+    Type: String
+    Default: ChatMessageHistory
+
+  S3BucketName:
+    Type: String
+    Default: kb-bedrock-rag-chat-code-3988efb0-0137-11f0-b220-06b5622a0cbf
+
+Resources:
+  # Lambda実行ロール
+  RagLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: RagLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:*'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'bedrock:*'
+                  - 'bedrock-knowledge-base:*'
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource: '*'
+
+  # Lambda関数
+  RagLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${System}-function
+      Runtime: python3.12
+      Handler: function.lambda_handler
+      Role: !GetAtt RagLambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        S3Bucket: !Sub ${S3BucketName}
+        S3Key: function.zip
+      Environment:
+        Variables:
+          KB_ID: !Ref KnowledgeBaseId
+          HISTORY_TABLE_NAME: !Ref DynamoTableName
+
+# API Gateway
+  RagApiGateway:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub ${System}-api
+      Description: RAGチャットアプリケーションのAPI
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+
+  # リソース定義
+  QueryResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RagApiGateway
+      ParentId: !GetAtt RagApiGateway.RootResourceId
+      PathPart: query
+
+  HistoryResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref RagApiGateway
+      ParentId: !GetAtt RagApiGateway.RootResourceId
+      PathPart: history
+
+  # クエリエンドポイント
+  QueryMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RagApiGateway
+      ResourceId: !Ref QueryResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RagLambdaFunction.Arn}/invocations
+
+  # 会話履歴取得エンドポイント
+  GetHistoryMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RagApiGateway
+      ResourceId: !Ref HistoryResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RagLambdaFunction.Arn}/invocations
+
+  # 会話履歴削除エンドポイント
+  DeleteHistoryMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RagApiGateway
+      ResourceId: !Ref HistoryResource
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${RagLambdaFunction.Arn}/invocations
+
+  # CORSサポート
+  QueryOptions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RagApiGateway
+      ResourceId: !Ref QueryResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'OPTIONS,POST'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  HistoryOptions:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref RagApiGateway
+      ResourceId: !Ref HistoryResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        IntegrationResponses:
+          - StatusCode: 200
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'OPTIONS,GET,DELETE'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+      MethodResponses:
+        - StatusCode: 200
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # APIデプロイメント
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - QueryMethod
+      - GetHistoryMethod
+      - DeleteHistoryMethod
+      - QueryOptions
+      - HistoryOptions
+    Properties:
+      RestApiId: !Ref RagApiGateway
+
+  # API Gateway CloudWatchロググループ
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/${System}-logs"
+      RetentionInDays: 7
+
+  # API Gatewayのロール（CloudWatchログ用）
+  ApiGatewayLoggingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: ApiGatewayLoggingPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:DescribeLogGroups'
+                  - 'logs:DescribeLogStreams'
+                  - 'logs:PutLogEvents'
+                  - 'logs:GetLogEvents'
+                  - 'logs:FilterLogEvents'
+                Resource: '*'
+
+  API Gateway ステージ (ログ有効化)
+  ApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      StageName: prod
+      RestApiId: !Ref RagApiGateway
+      DeploymentId: !Ref ApiDeployment
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
+        Format: >-
+          {
+            "requestId":"$context.requestId",
+            "ip": "$context.identity.sourceIp",
+            "caller":"$context.identity.caller",
+            "user":"$context.identity.user",
+            "requestTime":"$context.requestTime",
+            "httpMethod":"$context.httpMethod",
+            "resourcePath":"$context.resourcePath",
+            "status":"$context.status",
+            "protocol":"$context.protocol",
+            "responseLength":"$context.responseLength"
+          }
+      Variables:
+        loggingLevel: INFO
+
+  # API GatewayがLambdaを呼び出せるようにする権限
+  ApiGatewayInvokeLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RagLambdaFunction
+      Action: "lambda:InvokeFunction"
+      Principal: "apigateway.amazonaws.com"
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${RagApiGateway}/*/*/*"
+
+
+
+

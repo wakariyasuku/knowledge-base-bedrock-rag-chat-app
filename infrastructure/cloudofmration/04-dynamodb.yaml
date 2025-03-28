@@ -1,0 +1,18 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DynamoDB tables for RAG chat application
+
+Resources:  
+  ChatMessageHistoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: ChatMessageHistory
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: SessionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: SessionId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiration
+        Enabled: true

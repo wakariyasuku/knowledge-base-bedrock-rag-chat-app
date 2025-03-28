@@ -1,0 +1,117 @@
+#Kb-for-Bedock cannot be build by CloudFormation
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  System:
+    Type: String
+    Default: kb-bedrock-rag-chat
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+
+  AuroraClusterArn:
+    Type: String
+
+  SecretArn:
+    Type: String
+
+  Usage:
+    Type: String
+    Default: source
+
+Resources:
+
+  ######################################
+  # VPC Endpoint for S3
+  ######################################
+  S3VPCEndpoint:
+    Type: "AWS::EC2::VPCEndpoint"
+    Properties:
+      VpcEndpointType: "Gateway"
+      VpcId: !Ref VpcId
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
+      PrivateDnsEnabled: false
+
+  ######################################
+  # S3 Bucket for Knowledge Base
+  ######################################
+
+  KnowledgeBaseDataSourcesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub
+        - "${System}-${Usage}-${RandomSuffix}"
+        - RandomSuffix: !Select [2, !Split ["/", !Ref AWS::StackId]]
+
+  ######################################
+  # IAM Role for Knowledge Base
+  ######################################
+
+  IAMRoleForKnowledgeBase:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub AmazonBedrockExecutionRoleForKnowledgeBase_${System}
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - sts:AssumeRole
+            Principal:
+              Service:
+                - bedrock.amazonaws.com
+            Condition:
+              StringEquals:
+                aws:SourceAccount:
+                  - !Sub ${AWS::AccountId}
+              ArnLike:
+                aws:SourceArn:
+                  - !Sub "arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*"
+      Policies:
+        - PolicyName: AmazonBedrockRDSClusterPolicyForKnowledgeBase
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBClusters
+                  - rds-data:BatchExecuteStatement
+                  - rds-data:ExecuteStatement
+                Resource: !Sub ${AuroraClusterArn}
+        - PolicyName: AmazonBedrockS3PolicyForKnowledgeBase
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt KnowledgeBaseDataSourcesBucket.Arn
+                Condition:
+                  StringEquals:
+                    aws:ResourceAccount:
+                      - !Sub ${AWS::AccountId}
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub "${KnowledgeBaseDataSourcesBucket.Arn}/*"
+                Condition:
+                  StringEquals:
+                    aws:ResourceAccount:
+                      - !Sub ${AWS::AccountId}
+        - PolicyName: AmazonBedrockSecretsPolicyForKnowledgeBase
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub ${SecretArn}
+        - PolicyName: AmazonBedrockFoundationModelPolicyForKnowledgeBase
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/amazon.titan-embed-text-v2:0

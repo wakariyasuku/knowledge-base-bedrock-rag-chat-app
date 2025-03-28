@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  System:
+    Type: String
+    Default: kb-bedrock-rag-chat
+
+  VpcCIDR:
+    Type: String
+    Default: 192.168.0.0/24
+
+  PrivateSubnet1CIDR:
+    Type: String
+    Default: 192.168.0.0/28
+
+  PrivateSubnet2CIDR:
+    Type: String
+    Default: 192.168.0.16/28
+
+Resources:
+
+  ######################################
+  # VPC
+  ######################################
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${System}-vpc
+
+  ######################################
+  # Private Subnet
+  ######################################
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Sub ${AWS::Region}a
+      CidrBlock: !Ref PrivateSubnet1CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${System}-private-subnet-1a
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Sub ${AWS::Region}c
+      CidrBlock: !Ref PrivateSubnet2CIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${System}-private-subnet-1c
+
+  ######################################
+  # Route Table for Private Subnet
+  ######################################
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub rtb-${System}-private-subnet
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet1
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet2
+
+  ######################################
+  # Secret for Aurora
+  ######################################
+
+  SecretForAurora:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: database-user-for-bedrock-secret
+      Description: "This is a secret."
+      SecretString: '{
+          "username":"bedrock_user",
+          "password":"Knosn##!civ134&5%nsips!D"
+        }'
+
+  ######################################
+  # DB Subnet Group
+  ######################################
+
+  DBSubnetGroup:
+    Type: "AWS::RDS::DBSubnetGroup"
+    Properties:
+      DBSubnetGroupDescription: "This ia a Subnet Group for Aurora PostgreSQL"
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  ######################################
+  # Aurora
+  ######################################
+
+  AuroraCluster:
+    Type: 'AWS::RDS::DBCluster'
+    Properties:
+      DatabaseName: rag
+      Engine: aurora-postgresql
+      EngineVersion: 15.8
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      MasterUsername: postgresql
+      ManageMasterUserPassword: true
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0
+        MaxCapacity: 1.0
+      EnableHttpEndpoint: true
+
+  AuroraDBInstance:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      Engine: aurora-postgresql
+      DBInstanceClass: db.serverless
+      DBClusterIdentifier: !Ref AuroraCluster

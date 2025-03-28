@@ -1,0 +1,22 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFront & S3 template
+
+Parameters:
+  System:
+    Type: String
+    Default: kb-bedrock-rag-chat       
+
+  Usage:
+    Type: String
+    Default: code
+
+Resources:
+  #-----------------------------------------------------------------------------
+  # S3 bucket
+  #-----------------------------------------------------------------------------
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub
+        - "${System}-${Usage}-${RandomSuffix}"
+        - RandomSuffix: !Select [2, !Split ["/", !Ref AWS::StackId]]

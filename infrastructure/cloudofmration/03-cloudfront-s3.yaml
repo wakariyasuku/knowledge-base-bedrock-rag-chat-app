@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFront & S3 template
+
+Parameters:
+  System:
+    Type: String
+    Default: kb-bedrock-rag-chat       
+
+  Usage:
+    Type: String
+    Default: host
+
+  # LambdaEdgeArn:
+  #   Type: String
+  #   Default: arn:aws:lambda:us-east-1:622632352793:function:kb-bedrock-rag-chat-cloudfront-basic-auth-lambdaedge:2
+  #   Description: "Lambda@Edge Function Version ARN (Copy from Lambda stack output)"
+
+Resources:
+  #-----------------------------------------------------------------------------
+  # S3 bucket
+  #-----------------------------------------------------------------------------
+  S3Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub
+        - "${System}-${Usage}-${RandomSuffix}"
+        - RandomSuffix: !Select [2, !Split ["/", !Ref AWS::StackId]]
+
+  #-----------------------------------------------------------------------------
+  # S3 Bucket Policy
+  #-----------------------------------------------------------------------------
+  S3BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3Bucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - s3:GetObject
+            Effect: Allow
+            Resource:
+              - !Sub arn:aws:s3:::${S3Bucket}/*
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}
+
+#-----------------------------------------------------------------------------
+# Origin Access Controle 
+#-----------------------------------------------------------------------------
+  OAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub ${System}-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+#-----------------------------------------------------------------------------
+# CloudFront 
+#-----------------------------------------------------------------------------
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub ${System}Distribution
+        Origins:
+          - DomainName: !GetAtt S3Bucket.DomainName
+            Id: S3Origin
+            OriginAccessControlId: !GetAtt OAC.Id
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          Compress: true
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6  # recommmended policy for s3 site hosting
+          ViewerProtocolPolicy: redirect-to-https
+          # LambdaFunctionAssociations:
+          #   - EventType: viewer-request
+          #     LambdaFunctionARN: !Ref LambdaEdgeArn
+        DefaultRootObject: index.html # HTML file name at root directly on the S3 bucket
+        PriceClass: PriceClass_200 # 200 incudes asia
+        HttpVersion: http2and3 # to apply for all http methods
